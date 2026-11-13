@@ -126,7 +126,7 @@ export function createEnemies({ scene, models, fx, level, player }) {
 
   function shoot(enemy, distance) {
     const muzzle = enemy.gun.localToWorld(MUZZLE.clone())
-    const chance = THREE.MathUtils.clamp(0.6 - distance * 0.012, 0.08, 0.45) * (player.sprinting ? 0.6 : 1)
+    const chance = THREE.MathUtils.clamp(0.42 - distance * 0.01, 0.05, 0.3) * (player.sprinting ? 0.6 : 1)
     const hit = Math.random() < chance
     const target = player.eye.clone()
     if (hit) target.y -= 0.3
@@ -134,7 +134,7 @@ export function createEnemies({ scene, models, fx, level, player }) {
     fx.tracer(muzzle, target.sub(muzzle).multiplyScalar(1.5).add(muzzle))
     fx.flash(muzzle, 0.5)
     fx.play(distance > 35 ? 'ak_shot_far' : 'ak_shot', { at: muzzle, detune: (Math.random() - 0.5) * 150 })
-    if (hit) player.damage(10 + Math.random() * 7)
+    if (hit) player.damage(7 + Math.random() * 5)
   }
 
   function updateEnemy(enemy, dt) {
@@ -165,7 +165,7 @@ export function createEnemies({ scene, models, fx, level, player }) {
         if (enemy.burst === 0) enemy.burst = 3 + Math.floor(Math.random() * 3)
         shoot(enemy, distance)
         enemy.burst--
-        enemy.shotTimer = enemy.burst > 0 ? 0.1 : 0.9 + Math.random() * 1.2
+        enemy.shotTimer = enemy.burst > 0 ? 0.1 : 1.4 + Math.random() * 1.4
       }
     } else {
       animate(enemy, 'Run')

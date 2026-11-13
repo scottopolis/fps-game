@@ -288,7 +288,7 @@ function step(dt) {
   frags.update(dt)
   fx.update(dt)
 
-  if (clock - player.hurtAt > 5) player.health = Math.min(MAX_HEALTH, player.health + 40 * dt)
+  if (clock - player.hurtAt > 3) player.health = Math.min(MAX_HEALTH, player.health + 60 * dt)
   if (enemies.alive === 0 && nextWaveAt === 0) {
     nextWaveAt = clock + 4
     arsenal.resupply()
@@ -298,7 +298,7 @@ function step(dt) {
   if (nextWaveAt > 0 && clock >= nextWaveAt) {
     nextWaveAt = 0
     wave++
-    enemies.spawnWave(Math.min(3 + wave * 2, 14))
+    enemies.spawnWave(Math.min(2 + wave * 2, 12))
     announce(`WAVE ${wave}`)
   }
   lamps.target.position.copy(camera.position)
