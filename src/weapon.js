@@ -1,64 +1,77 @@
 import * as THREE from 'three'
 
-const FIRE_INTERVAL = 60 / 750
-const RELOAD_SPEED = 1.5
-const SIGHT = new THREE.Vector3(-6.02, 152.9, -5) // the rear sight, in the rifle mesh's own units
-const SIGHT_DISTANCE = 0.12 // how far ahead of the eye the rear sight sits when aiming
-const MUZZLE = new THREE.Vector3(0.05, -0.065, -0.56) // in the holder's space
 const SPRINT = { position: new THREE.Vector3(0, -0.03, 0), rotation: new THREE.Euler(-0.15, 0.5, 0.15) }
+const SIGHT_DISTANCE = 0.12 // how far ahead of the eye the sight sits when aiming
+const HIP_FOV = 72
 const smooth = (t) => t * t * (3 - 2 * t)
 
 /**
- * The player's M4: animated hands and rifle, automatic fire, recoil, aiming down sights, and reloading.
- * `model` is the rigged hands-and-rifle pack with Draw, Fire, Reload, Reload_Empty and Holster clips.
- * `targets()` returns the meshes bullets can hit; `onHit(hit, direction)` receives each impact.
+ * One of the player's guns: animated hands and weapon, firing, recoil, aiming down the sights and reloading.
+ * `model` is a rigged first-person pack and `spec` describes it (see `WEAPONS` in arsenal.js). `targets()`
+ * returns the meshes bullets can hit; `onHit(hit, direction, weapon)` receives each impact.
+ * The gun starts out of view; `draw()` raises it and `holster(then)` lowers it.
  */
-export function createWeapon({ camera, model, fx, targets, onHit }) {
+export function createWeapon({ camera, model, spec, fx, targets, onHit }) {
   const holder = new THREE.Group()
+  holder.visible = false
   camera.add(holder)
   holder.add(model)
+  model.position.fromArray(spec.seat.position)
+  model.rotation.set(spec.seat.pitch ?? 0, Math.PI, 0) // the packs point their guns at +Z; some hold them tilted
+  model.scale.setScalar(spec.seat.scale)
   model.traverse((node) => {
     if (node.isMesh) Object.assign(node, { frustumCulled: false, castShadow: false })
   })
-  // The pack is authored around its own camera joint; put that joint on our camera.
-  holder.updateMatrixWorld(true)
-  const eye = model.getObjectByName('FPS_Camera_j_01')
-  model.quaternion.copy(eye.getWorldQuaternion(new THREE.Quaternion()).premultiply(holder.getWorldQuaternion(new THREE.Quaternion()).invert()).invert())
-  model.position.copy(holder.worldToLocal(eye.getWorldPosition(new THREE.Vector3()))).applyQuaternion(model.quaternion).negate()
 
-  // The clips sit one after another on a shared timeline; move each to start at zero.
+  // Each animation is a span of an action's timeline, which `update` steps through by hand. A pack has either one
+  // long clip holding every animation (`spec.frames` gives each one's frames at 30 fps) or a clip per animation.
   const mixer = new THREE.AnimationMixer(model)
-  const actions = {}
-  for (const clip of model.animations) {
-    const start = Math.min(...clip.tracks.map((track) => track.times[0]))
-    clip.tracks.forEach((track) => track.shift(-start))
-    clip.resetDuration()
-    actions[clip.name] = mixer.clipAction(clip).setLoop(THREE.LoopOnce)
-    actions[clip.name].clampWhenFinished = true
+  const spans = {}
+  if (spec.frames) {
+    const action = mixer.clipAction(model.animations[0])
+    for (const [name, [from, to]] of Object.entries(spec.frames)) spans[name] = { action, from: from / 30, to: to / 30 }
+  } else {
+    for (const clip of model.animations) {
+      const start = Math.min(...clip.tracks.map((track) => track.times[0]))
+      clip.tracks.forEach((track) => track.shift(-start))
+      clip.resetDuration()
+      spans[clip.name] = { action: mixer.clipAction(clip), from: 0, to: clip.duration }
+    }
   }
 
   const raycaster = new THREE.Raycaster()
   raycaster.far = 400
   const direction = new THREE.Vector3()
   const origin = new THREE.Vector3()
-  const rifle = model.getObjectByName('Main_M4_D_0')
-  const sight = new THREE.Vector3()
+  const point = new THREE.Vector3()
+  const sightNode = model.getObjectByName(spec.sight.node)
+  const muzzleNode = model.getObjectByName(spec.muzzle.node)
   const sprintQ = new THREE.Quaternion().setFromEuler(SPRINT.rotation)
-  const weapon = { holder, mag: 30, reserve: 150, ads: 0, reloading: false, update, reload, stow }
-  let current = null
-  let busy = 0 // seconds until the running draw, reload or stow finishes; no firing meanwhile
+  const weapon = {
+    spec, holder, mag: spec.magSize, reserve: spec.reserve, ads: 0, scoped: false, reloading: false,
+    update, reload, stow, draw, holster,
+  }
+  let current = null // the animation span being shown, with `time` its position and `rate` its speed
+  let time = 0
+  let rate = 1
+  let busy = 0 // seconds until the running draw, reload or holster finishes; no firing meanwhile
   let after = null
   let cooldown = 0
+  let released = true // the trigger has been let go since the last shot
   let kick = 0 // extra view model recoil, decays every frame
   let bob = 0
   let run = 0
 
+  /** A point given in a node's own units, in the holder's space. */
+  const inHolder = (node, at) => holder.worldToLocal(node.localToWorld(point.fromArray(at)))
+
   function start(name, speed = 1) {
-    current?.stop()
-    current = actions[name]
-    current.timeScale = speed
-    current.reset().play()
-    return current.getClip().duration / speed
+    if (current && current.action !== spans[name].action) current.action.stop()
+    current = spans[name]
+    current.action.play().paused = true
+    time = current.from
+    rate = speed
+    return (current.to - current.from) / speed
   }
 
   function play(name, speed, then = null) {
@@ -67,32 +80,46 @@ export function createWeapon({ camera, model, fx, targets, onHit }) {
   }
 
   function reload() {
-    if (busy > 0 || weapon.mag === 30 || weapon.reserve === 0) return
+    if (busy > 0 || weapon.mag === spec.magSize || weapon.reserve === 0) return
     weapon.reloading = true
     fx.play('reload', { volume: 0.7 })
-    play(weapon.mag === 0 ? 'Reload_Empty' : 'Reload', RELOAD_SPEED, () => {
-      const loaded = Math.min(30 - weapon.mag, weapon.reserve)
+    play(weapon.mag === 0 && spans.Reload_Empty ? 'Reload_Empty' : 'Reload', spec.reloadSpeed, () => {
+      const loaded = Math.min(spec.magSize - weapon.mag, weapon.reserve)
       weapon.mag += loaded
       weapon.reserve -= loaded
       weapon.reloading = false
     })
   }
 
-  /** Lowers the rifle, calls `whenDown` while the hands are out of view, then raises it again. */
-  function stow(whenDown) {
+  function draw() {
+    holder.visible = true
+    play('Draw', spec.drawSpeed)
+  }
+
+  /** Lowers the gun out of view, then calls `then`. Returns false when the gun is busy. */
+  function holster(then) {
     if (busy > 0) return false
-    play('Holster', 2, () => {
-      whenDown()
-      play('Draw', 2)
+    play('Holster', spec.drawSpeed, () => {
+      holder.visible = false
+      then()
     })
     return true
   }
 
+  /** Lowers the gun, calls `whenDown` while the hands are out of view, then raises it again. */
+  function stow(whenDown) {
+    return holster(() => {
+      whenDown()
+      draw()
+    })
+  }
+
   function shoot(look, speed) {
     weapon.mag--
-    cooldown = FIRE_INTERVAL
-    start('Fire')
-    const spread = THREE.MathUtils.lerp(0.022, 0.002, weapon.ads) + speed * 0.002
+    cooldown = spec.interval
+    released = false
+    start('Fire', spec.fireSpeed)
+    const spread = THREE.MathUtils.lerp(spec.spread, spec.aimedSpread, weapon.ads) + speed * 0.002
     camera.updateMatrixWorld()
     camera.getWorldPosition(origin)
     direction.set((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread, -1).normalize()
@@ -100,14 +127,15 @@ export function createWeapon({ camera, model, fx, targets, onHit }) {
     raycaster.set(origin, direction)
     const hit = raycaster.intersectObjects(targets(), false)[0]
     const end = hit ? hit.point : origin.clone().addScaledVector(direction, 300)
-    fx.tracer(holder.localToWorld(MUZZLE.clone()), end)
-    fx.flash(MUZZLE, 0.16, holder)
-    fx.play('m4_shot', { volume: 0.8, detune: (Math.random() - 0.5) * 120 })
-    if (hit) onHit(hit, direction)
+    const muzzle = inHolder(muzzleNode, spec.muzzle.at).clone()
+    fx.tracer(holder.localToWorld(muzzle.clone()), end)
+    if (!weapon.scoped) fx.flash(muzzle, spec.flash, holder)
+    fx.play(spec.sound, { volume: 0.8, detune: (Math.random() - 0.5) * 120 })
+    if (hit) onHit(hit, direction, weapon)
     // Recoil climbs and wanders; aiming down sights steadies it.
     const steady = 1 - weapon.ads * 0.45
-    look.pitch += 0.011 * steady
-    look.yaw += (Math.random() - 0.5) * 0.008 * steady
+    look.pitch += spec.recoil * steady
+    look.yaw += (Math.random() - 0.5) * spec.recoil * 0.7 * steady
     kick = 1
   }
 
@@ -119,21 +147,27 @@ export function createWeapon({ camera, model, fx, targets, onHit }) {
       after = null
       done?.()
     }
+    if (!fire) released = true
     if (weapon.mag === 0 && fire) reload()
-    if (fire && cooldown <= 0 && weapon.mag > 0 && busy <= 0) shoot(look, speed)
-    mixer.update(dt)
+    if (fire && (spec.automatic || released) && cooldown <= 0 && weapon.mag > 0 && busy <= 0) shoot(look, speed)
+    time = Math.min(time + dt * rate, current.to)
+    current.action.time = time
+    mixer.update(0)
 
     const wantAds = aim && busy <= 0 ? 1 : 0
     weapon.ads += (wantAds - weapon.ads) * Math.min(1, dt * 14)
-    camera.fov = THREE.MathUtils.lerp(72, 46, smooth(weapon.ads))
+    // A scoped gun fills the view with its scope picture (drawn by the HUD) once it is fully raised.
+    weapon.scoped = Boolean(spec.scope) && weapon.ads > 0.9
+    model.visible = !weapon.scoped
+    camera.fov = weapon.scoped ? spec.aimFov : THREE.MathUtils.lerp(HIP_FOV, spec.scope ? 50 : spec.aimFov, smooth(weapon.ads))
     camera.updateProjectionMatrix()
 
     kick = Math.max(0, kick - dt * 9)
     bob += dt * speed * 1.9
     run += ((sprinting && busy <= 0 ? 1 : 0) - run) * Math.min(1, dt * 9)
     const sway = (1 - weapon.ads * 0.9) * Math.min(speed / 5, 1.6)
-    // Aiming slides the rig until the rear sight is on the view axis, wherever the animation has put the rifle.
-    holder.worldToLocal(rifle.localToWorld(sight.copy(SIGHT)))
+    // Aiming slides the rig until the sight is on the view axis, wherever the animation has put the gun.
+    const sight = inHolder(sightNode, spec.sight.at)
     holder.position.set(-sight.x, -sight.y, -sight.z - SIGHT_DISTANCE).multiplyScalar(smooth(weapon.ads)).addScaledVector(SPRINT.position, run)
     holder.position.x += Math.cos(bob * 0.5) * 0.005 * sway
     holder.position.y += Math.sin(bob) * 0.005 * sway
@@ -141,6 +175,5 @@ export function createWeapon({ camera, model, fx, targets, onHit }) {
     holder.quaternion.identity().slerp(sprintQ, smooth(run))
   }
 
-  play('Draw', 1)
   return weapon
 }

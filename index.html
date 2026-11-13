@@ -38,6 +38,12 @@
         border: 1px solid rgba(255, 255, 255, 0.3); }
       #score { position: absolute; right: 40px; top: 30px; font-size: 26px; font-weight: 600; letter-spacing: 2px;
         text-shadow: 0 1px 4px #000; }
+      /* The sniper's scope picture: a clear circle with cross hairs in a black surround. */
+      #scope { position: absolute; inset: 0; display: none;
+        background: radial-gradient(circle at center, transparent 41vh, rgba(0, 0, 0, 0.5) 41.6vh, #000 43vh); }
+      #scope::before, #scope::after { content: ''; position: absolute; background: #000; }
+      #scope::before { left: 0; right: 0; top: 50%; height: 1px; }
+      #scope::after { top: 0; bottom: 0; left: 50%; width: 1px; }
       #popup { position: absolute; left: 0; right: 0; top: 57%; text-align: center; font-size: 15px; letter-spacing: 3px;
         color: #f2d27a; text-shadow: 0 1px 4px #000; opacity: 0; transition: opacity 0.25s; }
       #message { position: absolute; left: 0; right: 0; top: 22%; text-align: center; font-size: 22px;
@@ -50,6 +56,7 @@
   </head>
   <body>
     <div id="hud">
+      <div id="scope"></div>
       <div id="vignette"></div>
       <div id="crosshair"></div>
       <div id="hitmarker"></div>
@@ -58,12 +65,12 @@
       <div id="score">0</div>
       <div id="popup"></div>
       <div id="status"><span id="wave"></span><div id="life"><small>HEALTH</small><div id="health"><i></i></div><b id="hp"></b></div></div>
-      <div id="ammo"><small>M4A1</small><b id="mag">30</b> <span id="reserve">/ 150</span><small id="grenades"></small></div>
+      <div id="ammo"><small id="weapon"></small><b id="mag">30</b> <span id="reserve">/ 150</span><small id="grenades"></small></div>
     </div>
     <div id="overlay">
       <h1>FACTORY</h1>
       <p id="prompt">Loading…</p>
-      <p>WASD move · SHIFT sprint · SPACE jump · MOUSE aim<br />LEFT CLICK fire · RIGHT CLICK aim down sights · R reload · G frag grenade</p>
+      <p>WASD move · SHIFT sprint · SPACE jump · MOUSE aim<br />LEFT CLICK fire · E aim down sights or scope · R reload · G frag grenade<br />1 2 3 or Q switch weapon · walk up to a weapon to pick it up</p>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -36,12 +36,15 @@ const CUSTOM = {
   soldier: null,
   factory: null,
   factory_collision: null,
-  m4_fp: null, // the player's animated hands and rifle
+  m4_fp: null, // the player's animated hands and guns
+  pistol_fp: null,
+  sniper_fp: null,
 }
 const POLYHAVEN = ['concrete_road_barrier_02', 'Barrel_01', 'barrel_03', 'covered_car', 'metal_jerrycan_green',
   'ammo_box', 'utility_box_01', 'metal_trash_can', 'plastic_crate_02']
-const SOUNDS = ['m4_shot', 'ak_shot', 'ak_shot_far', 'reload', 'pain1', 'pain2', 'pain3', 'death1', 'death2',
-  'death3', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'impact_stone', 'impact_metal', 'impact_flesh', 'wind']
+const SOUNDS = ['m4_shot', 'pistol_shot', 'sniper_shot', 'ak_shot', 'ak_shot_far', 'reload', 'pain1', 'pain2', 'pain3', 'death1', 'death2',
+  'death3', 'step1', 'step2', 'step3', 'step4', 'step5', 'step6', 'impact_stone', 'impact_metal',
+  'impact_flesh', 'wind']
 
 function shadows(root) {
   root.traverse((node) => {

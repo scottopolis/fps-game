@@ -4,7 +4,7 @@ import { Capsule } from 'three/addons/math/Capsule.js'
 import { loadAssets } from './assets.js'
 import { buildLevel } from './level.js'
 import { createFx } from './fx.js'
-import { createWeapon } from './weapon.js'
+import { createArsenal } from './arsenal.js'
 import { createEnemies } from './enemies.js'
 import { createGrenades } from './grenades.js'
 
@@ -56,7 +56,7 @@ const body = new Capsule(new THREE.Vector3(start.x, 0.35, start.z), new THREE.Ve
 const velocity = new THREE.Vector3()
 const look = { yaw: level.playerYaw, pitch: 0 }
 const keys = new Set()
-const mouse = { fire: false, aim: false }
+const mouse = { fire: false, aim: false } // `aim` is toggled with E
 const player = { eye: camera.position, sprinting: false, health: MAX_HEALTH, hurtAt: -10, damage }
 let onFloor = false
 let stride = 0
@@ -84,17 +84,20 @@ function damage(amount) {
 }
 
 const enemies = createEnemies({ scene, models: assets.models, fx, level, player })
-const weapon = createWeapon({
+const arsenal = createArsenal({
+  scene,
   camera,
-  model: assets.models.m4_fp,
+  models: assets.models,
   fx,
+  pickups: level.pickups,
+  onPickup: (weapon, slot) => announce(`${weapon.spec.name} — PRESS ${slot}`),
   targets: () => [...level.colliders, ...enemies.hitboxes],
-  onHit(hit, direction) {
+  onHit(hit, direction, weapon) {
     const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
     if (hit.object.userData.enemy) {
       fx.puff(hit.point, direction.clone().negate(), 0x7a0c0c, 0.45)
       fx.play('impact_flesh', { at: hit.point, volume: 0.8 })
-      if (enemies.damage(hit.object)) award(hit.object.userData.head ? 150 : 100, hit.object.userData.head ? 'HEADSHOT' : 'KILL')
+      if (enemies.damage(hit.object, weapon.spec.damage)) award(hit.object.userData.head ? 150 : 100, hit.object.userData.head ? 'HEADSHOT' : 'KILL')
       $('hitmarker').style.opacity = 1
       setTimeout(() => { $('hitmarker').style.opacity = 0 }, 90)
       return
@@ -127,10 +130,11 @@ const frags = createGrenades({
 })
 
 function throwGrenade() {
-  if (grenades === 0 || !weapon.stow(() => {
+  if (grenades === 0 || !arsenal.weapon.stow(() => {
     const aim = camera.getWorldDirection(new THREE.Vector3())
     frags.throw(camera.position.clone().addScaledVector(aim, 0.5), aim)
   })) return
+  mouse.aim = false
   grenades--
 }
 
@@ -146,16 +150,23 @@ function award(points, label) {
 
 addEventListener('keydown', (event) => {
   keys.add(event.code)
-  if (event.code === 'KeyR' && playing) weapon.reload()
-  if (event.code === 'KeyG' && playing && !event.repeat) throwGrenade()
+  if (!playing || event.repeat) return
+  if (event.code === 'KeyR') arsenal.weapon.reload()
+  if (event.code === 'KeyG') throwGrenade()
+  if (event.code === 'KeyE') mouse.aim = !mouse.aim
+  if (event.code === 'KeyQ' || /^Digit[1-3]$/.test(event.code)) {
+    mouse.aim = false
+    if (event.code === 'KeyQ') arsenal.next()
+    else arsenal.select(Number(event.code.slice(5)))
+  }
 })
 addEventListener('keyup', (event) => keys.delete(event.code))
-addEventListener('mousedown', (event) => { if (playing) mouse[event.button === 2 ? 'aim' : 'fire'] = true })
-addEventListener('mouseup', (event) => { mouse[event.button === 2 ? 'aim' : 'fire'] = false })
+addEventListener('mousedown', (event) => { if (playing && event.button === 0) mouse.fire = true })
+addEventListener('mouseup', (event) => { if (event.button === 0) mouse.fire = false })
 addEventListener('contextmenu', (event) => event.preventDefault())
 addEventListener('mousemove', (event) => {
   if (document.pointerLockElement !== renderer.domElement) return
-  const sensitivity = 0.0022 * (1 - weapon.ads * 0.45)
+  const sensitivity = 0.0022 * (camera.fov / 72) // slower when zoomed in
   look.yaw -= event.movementX * sensitivity
   look.pitch -= event.movementY * sensitivity
 })
@@ -177,7 +188,8 @@ $('overlay').onclick = () => {
 function movePlayer(dt) {
   const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0)
   const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0)
-  player.sprinting = keys.has('ShiftLeft') && forward > 0 && !mouse.aim
+  player.sprinting = keys.has('ShiftLeft') && forward > 0
+  if (player.sprinting) mouse.aim = false
   const acceleration = (onFloor ? (player.sprinting ? 42 : mouse.aim ? 14 : 27) : 5) * dt
   const sin = Math.sin(look.yaw)
   const cos = Math.cos(look.yaw)
@@ -204,6 +216,9 @@ function movePlayer(dt) {
 }
 
 function updateHud() {
+  const weapon = arsenal.weapon
+  $('weapon').textContent = arsenal.owned.map((gun, i) => (gun === weapon ? `[ ${gun.spec.name} ]` : gun.spec.name)).join('  ·  ')
+  $('scope').style.display = weapon.scoped ? 'block' : 'none'
   $('mag').textContent = weapon.reloading ? '--' : weapon.mag
   $('grenades').textContent = `FRAG × ${grenades}`
   $('score').textContent = score
@@ -218,7 +233,7 @@ function updateHud() {
   $('crosshair').style.opacity = weapon.ads > 0.5 || weapon.reloading ? 0 : 0.8
 }
 
-/** Minimap: the player at the centre facing up, hostiles as red dots within 45 m (pinned to the rim beyond). */
+/** Minimap: the player at the centre facing up, hostiles as red dots and guns to pick up as yellow ones, within 45 m (pinned to the rim beyond). */
 const radar = $('radar').getContext('2d')
 function drawRadar() {
   const sin = Math.sin(look.yaw)
@@ -236,16 +251,17 @@ function drawRadar() {
   radar.lineTo(80, 80)
   radar.lineTo(70, 80)
   radar.fill()
-  radar.fillStyle = '#e03a2f'
-  for (const enemy of enemies.list) {
-    if (enemy.dead > 0) continue
-    const dx = enemy.root.position.x - camera.position.x
-    const dz = enemy.root.position.z - camera.position.z
+  const dot = (position, colour) => {
+    const dx = position.x - camera.position.x
+    const dz = position.z - camera.position.z
     const scale = Math.min(70 / 45, 70 / Math.hypot(dx, dz))
+    radar.fillStyle = colour
     radar.beginPath()
     radar.arc(75 + (dx * cos - dz * sin) * scale, 75 + (dx * sin + dz * cos) * scale, 3, 0, Math.PI * 2)
     radar.fill()
   }
+  for (const position of arsenal.lying) dot(position, '#f2d27a')
+  for (const enemy of enemies.list) if (!enemy.dead) dot(enemy.root.position, '#e03a2f')
 }
 
 function announce(text) {
@@ -267,7 +283,7 @@ function step(dt) {
     stride = 0
     fx.play(`step${1 + Math.floor(Math.random() * 6)}`, { volume: 0.3, detune: (Math.random() - 0.5) * 200 })
   }
-  weapon.update(dt, { fire: mouse.fire && !player.sprinting, aim: mouse.aim, sprinting: player.sprinting, speed, look })
+  arsenal.update(dt, { fire: mouse.fire && !player.sprinting, aim: mouse.aim, sprinting: player.sprinting, speed, look })
   enemies.update(dt)
   frags.update(dt)
   fx.update(dt)
@@ -275,7 +291,7 @@ function step(dt) {
   if (clock - player.hurtAt > 5) player.health = Math.min(MAX_HEALTH, player.health + 40 * dt)
   if (enemies.alive === 0 && nextWaveAt === 0) {
     nextWaveAt = clock + 4
-    weapon.reserve = Math.min(210, weapon.reserve + 60)
+    arsenal.resupply()
     grenades = Math.min(4, grenades + 2)
     announce('AREA CLEAR — RESUPPLIED')
   }
@@ -300,4 +316,4 @@ renderer.setAnimationLoop((time) => {
 camera.position.copy(body.end)
 
 // For automated checks and debugging from the console.
-window.game = { throwGrenade, get score() { return score }, camera, body, look, player, weapon, enemies, level, keys, mouse, step, scene }
+window.game = { throwGrenade, get score() { return score }, camera, body, look, player, arsenal, get weapon() { return arsenal.weapon }, enemies, level, keys, mouse, step, scene }

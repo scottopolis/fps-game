@@ -196,10 +196,10 @@ export function createEnemies({ scene, models, fx, level, player }) {
         spawn(v.set(point.x + (Math.random() - 0.5) * 3, 0, point.z + (Math.random() - 0.5) * 3))
       }
     },
-    /** Applies a bullet hit to the enemy that owns `hitbox`. Returns true when it kills. */
-    damage(hitbox) {
+    /** Applies a bullet hit to the enemy that owns `hitbox`; a head hit does triple damage. Returns true when it kills. */
+    damage(hitbox, amount = 34) {
       const { enemy, head } = hitbox.userData
-      enemy.health -= head ? 100 : 34
+      enemy.health -= head ? amount * 3 : amount
       if (enemy.health > 0) {
         if (Math.random() < 0.5) fx.play(`pain${1 + Math.floor(Math.random() * 3)}`, { at: hitbox.getWorldPosition(v) })
         return false
